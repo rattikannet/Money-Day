@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<style>
+  body { font-family: 'TH Sarabun New', 'Sarabun', sans-serif; font-size: 16px; margin: 20px; }
+  .header { text-align: center; margin-bottom: 10px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  th, td { border: 1px solid #000; padding: 4px 6px; font-size: 14px; }
+  th { background: #f0f0f0; text-align: center; }
+  td.num { text-align: right; } td.center { text-align: center; }
+  .info-line { display:flex; justify-content: space-between; margin: 6px 0; }
+  .signature { margin-top: 40px; display:flex; justify-content: space-around; text-align:center; }
+  .sign-box { width: 250px; }
+  @media print {
+    .no-print { display: none; }
+    @page { size: A4 landscape; margin: 10mm; }
+  }
+</style>
+</head>
+<body>
+<?
+  var data = getRegisterData(accountId, dateFrom, dateTo);
+?>
+<div class="no-print" style="margin-bottom:15px;">
+  <button onclick="window.print()">🖨️ พิมพ์เอกสาร</button>
+  <button onclick="window.close()">ปิดหน้าต่าง</button>
+</div>
+
+<div class="header">
+  <h3><?= data.hospitalName ?></h3>
+  <h3><?= data.account.type == 'เงินสด' ? 'ทะเบียนคุมเงินสด' : (data.account.type == 'เงินฝากธนาคาร' ? 'ทะเบียนคุมเงินฝากธนาคาร' : 'ทะเบียนคุมเงิน - ' + data.account.type) ?></h3>
+</div>
+<div class="info-line">
+  <span>ชื่อบัญชี/รายการ: <?= data.account.name ?></span>
+  <span>เลขที่บัญชี/อ้างอิง: <?= data.account.ref ?></span>
+</div>
+<div class="info-line">
+  <span>ตั้งแต่วันที่ <?= dateFrom || '-' ?> ถึงวันที่ <?= dateTo || '-' ?></span>
+  <span>พิมพ์วันที่: <?= data.printDate ?></span>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width:80px;">วันเดือนปี</th>
+      <th>รายการ</th>
+      <th style="width:100px;">เลขที่เอกสาร</th>
+      <th style="width:100px;">รับ (บาท)</th>
+      <th style="width:100px;">จ่าย (บาท)</th>
+      <th style="width:100px;">คงเหลือ (บาท)</th>
+      <th style="width:80px;">หมายเหตุ</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="center" colspan="5"><b>ยอดยกมา</b></td>
+      <td class="num"><b><?= data.opening.toLocaleString('en-US', {minimumFractionDigits:2}) ?></b></td>
+      <td></td>
+    </tr>
+    <? for (var i=0;i<data.rows.length;i++){ var r = data.rows[i]; ?>
+    <tr>
+      <td class="center"><?= r.date ?></td>
+      <td><?= r.description ?></td>
+      <td class="center"><?= r.docNo ?></td>
+      <td class="num"><?= r.receive ? r.receive.toLocaleString('en-US',{minimumFractionDigits:2}) : '' ?></td>
+      <td class="num"><?= r.pay ? r.pay.toLocaleString('en-US',{minimumFractionDigits:2}) : '' ?></td>
+      <td class="num"><?= r.balance.toLocaleString('en-US',{minimumFractionDigits:2}) ?></td>
+      <td class="center"><?= r.note ?></td>
+    </tr>
+    <? } ?>
+    <tr>
+      <td class="center" colspan="5"><b>ยอดคงเหลือยกไป</b></td>
+      <td class="num"><b><?= data.closing.toLocaleString('en-US',{minimumFractionDigits:2}) ?></b></td>
+      <td></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="signature">
+  <div class="sign-box">
+    ลงชื่อ ....................................... ผู้บันทึก<br>
+    ( ....................................... )<br>
+    วันที่ ......../......../..........
+  </div>
+  <div class="sign-box">
+    ลงชื่อ ....................................... ผู้ตรวจสอบ<br>
+    ( ....................................... )<br>
+    วันที่ ......../......../..........
+  </div>
+</div>
+</body>
+</html>
