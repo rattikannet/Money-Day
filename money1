@@ -1,0 +1,218 @@
+/**
+ * ระบบเงินคงเหลือประจำวัน โรงพยาบาลภูเรือ
+ */
+const SS = SpreadsheetApp.getActiveSpreadsheet();
+const SHEET_ACCOUNTS = 'Accounts';
+const SHEET_TRANSACTIONS = 'Transactions';
+const SHEET_CONFIG = 'Config';
+
+// ---------- SETUP: รันครั้งเดียวก่อนใช้งาน ----------
+function setupSheets() {
+  createSheetIfNotExist(SHEET_ACCOUNTS, [
+    'รหัสบัญชี','ชื่อบัญชี','ประเภทบัญชี','เลขที่บัญชี/อ้างอิง','ยอดยกมา','สถานะ'
+  ]);
+  createSheetIfNotExist(SHEET_TRANSACTIONS, [
+    'รหัสรายการ','วันที่','รหัสบัญชี','ชื่อบัญชี','ประเภทรายการ','รายละเอียด',
+    'เลขที่เอกสาร','เงินรับ','เงินจ่าย','ยอดคงเหลือ','ผู้บันทึก','หมายเหตุ','เวลาบันทึก'
+  ]);
+  createSheetIfNotExist(SHEET_CONFIG, ['Key','Value']);
+}
+
+function createSheetIfNotExist(name, headers) {
+  let sh = SS.getSheetByName(name);
+  if (!sh) {
+    sh = SS.insertSheet(name);
+    sh.appendRow(headers);
+    sh.setFrozenRows(1);
+    sh.getRange(1,1,1,headers.length).setFontWeight('bold').setBackground('#4a86e8').setFontColor('#ffffff');
+  }
+  return sh;
+}
+
+// ---------- WEB APP ENTRY ----------
+function doGet(e) {
+  const page = e.parameter.page;
+  if (page === 'register') {
+    const t = HtmlService.createTemplateFromFile('Register');
+    t.accountId = e.parameter.account || '';
+    t.dateFrom = e.parameter.from || '';
+    t.dateTo = e.parameter.to || '';
+    return t.evaluate().setTitle('ทะเบียนคุมเงิน - รพ.ภูเรือ')
+      .addMetaTag('viewport','width=device-width, initial-scale=1');
+  }
+  return HtmlService.createTemplateFromFile('Index').evaluate()
+    .setTitle('ระบบเงินคงเหลือประจำวัน รพ.ภูเรือ')
+    .addMetaTag('viewport','width=device-width, initial-scale=1')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+// ---------- ACCOUNTS ----------
+function getAccounts() {
+  const sh = SS.getSheetByName(SHEET_ACCOUNTS);
+  const data = sh.getDataRange().getValues();
+  data.shift();
+  return data.filter(r => r[0]).map(r => ({
+    id: r[0], name: r[1], type: r[2], ref: r[3], opening: Number(r[4])||0, status: r[5]
+  }));
+}
+
+function addAccount(acc) {
+  const sh = SS.getSheetByName(SHEET_ACCOUNTS);
+  const id = 'ACC-' + Utilities.formatDate(new Date(), 'GMT+7', 'yyMMddHHmmss');
+  sh.appendRow([id, acc.name, acc.type, acc.ref, acc.opening || 0, 'active']);
+  return id;
+}
+
+function updateAccount(acc) {
+  const sh = SS.getSheetByName(SHEET_ACCOUNTS);
+  const data = sh.getDataRange().getValues();
+  for (let i=1;i<data.length;i++){
+    if (data[i][0] === acc.id) {
+      sh.getRange(i+1,2,1,5).setValues([[acc.name, acc.type, acc.ref, acc.opening, acc.status]]);
+      break;
+    }
+  }
+}
+
+// ---------- BALANCE ----------
+function getAccountBalance(accountId) {
+  const accounts = getAccounts();
+  const acc = accounts.find(a => a.id === accountId);
+  if (!acc) return 0;
+  const sh = SS.getSheetByName(SHEET_TRANSACTIONS);
+  const data = sh.getDataRange().getValues();
+  let balance = acc.opening;
+  for (let i=1;i<data.length;i++){
+    if (data[i][2] === accountId){
+      balance += (Number(data[i][7])||0) - (Number(data[i][8])||0);
+    }
+  }
+  return balance;
+}
+
+function getDashboardData() {
+  const accounts = getAccounts();
+  const result = accounts.map(acc => ({
+    id: acc.id, name: acc.name, type: acc.type, balance: getAccountBalance(acc.id)
+  }));
+  const grouped = {};
+  result.forEach(r => { grouped[r.type] = (grouped[r.type]||0) + r.balance; });
+  const total = result.reduce((s,r)=>s+r.balance,0);
+  return { accounts: result, grouped: grouped, total: total,
+    today: Utilities.formatDate(new Date(), 'GMT+7', 'dd/MM/yyyy') };
+}
+
+// ---------- TRANSACTIONS ----------
+function addTransaction(tx) {
+  const sh = SS.getSheetByName(SHEET_TRANSACTIONS);
+  const accounts = getAccounts();
+  const acc = accounts.find(a => a.id === tx.accountId);
+  if (!acc) throw new Error('ไม่พบบัญชีที่เลือก');
+
+  const id = 'TXN-' + Utilities.formatDate(new Date(), 'GMT+7', 'yyMMddHHmmssSSS');
+  const receive = tx.type === 'รับ' ? Number(tx.amount)||0 : 0;
+  const pay = tx.type === 'จ่าย' ? Number(tx.amount)||0 : 0;
+
+  sh.appendRow([
+    id, tx.date, tx.accountId, acc.name, tx.type, tx.description,
+    tx.docNo || '', receive, pay, 0,
+    tx.user || Session.getActiveUser().getEmail(), tx.note || '', new Date()
+  ]);
+  recalculateAllBalances();
+  return { id: id, balance: getAccountBalance(tx.accountId) };
+}
+
+function deleteTransaction(txId) {
+  const sh = SS.getSheetByName(SHEET_TRANSACTIONS);
+  const data = sh.getDataRange().getValues();
+  for (let i=1;i<data.length;i++){
+    if (data[i][0] === txId) { sh.deleteRow(i+1); break; }
+  }
+  recalculateAllBalances();
+}
+
+// คำนวณยอดคงเหลือสะสมใหม่ทั้งหมด (เรียงตามลำดับแถวปัจจุบัน)
+function recalculateAllBalances() {
+  const sh = SS.getSheetByName(SHEET_TRANSACTIONS);
+  const data = sh.getDataRange().getValues();
+  const accounts = getAccounts();
+  const runningBal = {};
+  accounts.forEach(a => runningBal[a.id] = a.opening);
+
+  for (let i=1;i<data.length;i++){
+    const accId = data[i][2];
+    if (runningBal[accId] === undefined) continue;
+    runningBal[accId] += (Number(data[i][7])||0) - (Number(data[i][8])||0);
+    sh.getRange(i+1,10).setValue(runningBal[accId]);
+  }
+}
+
+// เรียงลำดับตามวันที่แล้วคำนวณยอดใหม่ (ใช้เมื่อมีการบันทึกย้อนหลัง)
+function sortAndRecalculate() {
+  const sh = SS.getSheetByName(SHEET_TRANSACTIONS);
+  const range = sh.getDataRange();
+  const data = range.getValues();
+  const header = data.shift();
+  data.sort((a,b)=>{
+    if (a[2] !== b[2]) return a[2] < b[2] ? -1 : 1;
+    const da = (a[1] instanceof Date)? a[1] : new Date(a[1]);
+    const db = (b[1] instanceof Date)? b[1] : new Date(b[1]);
+    return da - db;
+  });
+  if (data.length) sh.getRange(2,1,data.length,header.length).setValues(data);
+  recalculateAllBalances();
+}
+
+// ---------- LEDGER (บัญชีแยกประเภท) ----------
+function getLedger(accountId, dateFrom, dateTo) {
+  const sh = SS.getSheetByName(SHEET_TRANSACTIONS);
+  const data = sh.getDataRange().getValues();
+  const accounts = getAccounts();
+  const acc = accounts.find(a => a.id === accountId);
+  if (!acc) return { opening: 0, rows: [], closing: 0 };
+
+  let rows = [];
+  for (let i=1;i<data.length;i++){
+    if (data[i][2] !== accountId) continue;
+    const d = data[i][1];
+    const dateVal = (d instanceof Date) ? d : new Date(d);
+    if (dateFrom && dateVal < new Date(dateFrom)) continue;
+    if (dateTo && dateVal > new Date(dateTo + ' 23:59:59')) continue;
+    rows.push({
+      id: data[i][0],
+      date: Utilities.formatDate(dateVal, 'GMT+7', 'dd/MM/yyyy'),
+      type: data[i][4], description: data[i][5], docNo: data[i][6],
+      receive: Number(data[i][7])||0, pay: Number(data[i][8])||0,
+      balance: Number(data[i][9])||0, user: data[i][10], note: data[i][11]
+    });
+  }
+
+  let opening = acc.opening;
+  if (dateFrom) {
+    let before = [];
+    for (let i=1;i<data.length;i++){
+      if (data[i][2] !== accountId) continue;
+      const dateVal = (data[i][1] instanceof Date) ? data[i][1] : new Date(data[i][1]);
+      if (dateVal < new Date(dateFrom)) before.push(data[i]);
+    }
+    if (before.length) opening = Number(before[before.length-1][9])||0;
+  }
+
+  const closing = rows.length ? rows[rows.length-1].balance : opening;
+  return { account: acc, opening: opening, rows: rows, closing: closing };
+}
+
+// ---------- REGISTER (ทะเบียนคุมเงินฝากธนาคาร/เงินสด) ----------
+function getRegisterData(accountId, dateFrom, dateTo) {
+  const ledger = getLedger(accountId, dateFrom, dateTo);
+  return {
+    hospitalName: 'โรงพยาบาลภูเรือ อำเภอภูเรือ จังหวัดเลย',
+    account: ledger.account, opening: ledger.opening, rows: ledger.rows, closing: ledger.closing,
+    dateFrom: dateFrom, dateTo: dateTo,
+    printDate: Utilities.formatDate(new Date(), 'GMT+7', 'dd/MM/yyyy')
+  };
+}
